@@ -59,7 +59,7 @@ This creates three demo users you can log in with:
 npm test
 ```
 
-Runs over 1,100 fast Vitest tests (under 10 seconds). Tests sit next to the code they cover (`src/**/*.test.ts`, plus `docker/**/*.test.mjs` for the Docker build scripts): money and split math, balance computation, rate limiting, exchange rates, sign-in, OIDC and Google policy, guest sessions, AI providers, and the admin, auth, balances, expenses, guest, groups, and receipts routers.
+Runs over 1,100 fast Vitest tests (under 10 seconds). Tests sit next to the code they cover (`src/**/*.test.ts`, plus `docker/**/*.test.mjs` for the Docker build scripts and `scripts/**/*.test.ts` for the repo scripts): money and split math, balance computation, rate limiting, exchange rates, sign-in, OIDC and Google policy, guest sessions, AI providers, the admin, auth, balances, expenses, guest, groups, and receipts routers, and the translation checks.
 
 ### E2E tests
 
@@ -103,7 +103,7 @@ TypeScript runs in strict mode with extra checks, including `exactOptionalProper
 ### Translations
 
 ```bash
-npm run lint:i18n   # every locale has exactly the keys English has
+npm run lint:i18n   # every locale has exactly the keys English has, its files are valid JSON and its messages valid ICU, and counts named `count` use plurals (CONTRIBUTING-TRANSLATIONS.md)
 ```
 
 CI runs it too; run it locally whenever you add or change UI text. See [CONTRIBUTING-TRANSLATIONS.md](CONTRIBUTING-TRANSLATIONS.md).
@@ -132,7 +132,7 @@ Routers live in `src/server/trpc/routers/`. Add your procedure there and wire it
 - **One concern per PR** — bug fixes, features, and refactors should be separate PRs.
 - **Describe what and why** — the PR description should explain the motivation, not just restate the diff.
 - **Add tests** — new logic should have unit tests where possible; new user flows should have e2e coverage.
-- **Pass CI** — the required `test` check runs `npm audit --omit=dev --audit-level=high`, `npm run format:check`, `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`, and the Playwright e2e suite. Run the first six locally before opening a PR. If you change `docker/`, the entrypoint, `prisma/` SQL, or dependencies, also run `npm run test:docker` (the Docker Fresh Install check; `DOCKER_HOST=ssh://user@host` works if you have no local Docker).
+- **Pass CI** — the required `test` check runs `npm audit --omit=dev --audit-level=high`, `npm run format:check`, `npm run lint`, `npm run lint:i18n`, `npx tsc --noEmit`, `npm test`, `npm run build`, and the Playwright e2e suite. Run the first seven locally before opening a PR. If you change `docker/`, the entrypoint, `prisma/` SQL, or dependencies, also run `npm run test:docker` (the Docker Fresh Install check; `DOCKER_HOST=ssh://user@host` works if you have no local Docker).
 - **Document upgrade steps** — if a change needs anything from operators on upgrade (a manual command, a new required variable, a behavior they must know about), add it under **Upgrading** in the README, since build releases only list commit titles.
 - **Conventional commits** — use prefixes like `feat:`, `fix:`, `chore:`, `docs:`, `refactor:` in commit messages.
 
