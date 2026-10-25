@@ -152,6 +152,7 @@ describe('other providers', () => {
     expect(oidc).toMatchObject({
       type: 'oidc',
       name: 'Authentik',
+      checks: ['pkce', 'state'],
       issuer: OIDC_ENV.OIDC_ISSUER,
       clientId: OIDC_ENV.OIDC_CLIENT_ID,
       clientSecret: OIDC_ENV.OIDC_CLIENT_SECRET,
