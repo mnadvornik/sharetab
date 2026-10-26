@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useState, useRef, useEffect } from 'react';
+import { use, useState, useRef, useEffect, useCallback } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { trpc } from '@/lib/trpc';
 import { formatCents } from '@/lib/money';
@@ -66,6 +66,41 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
     { groupId, limit: 10, search: debouncedSearch },
     { getNextPageParam: (lastPage) => lastPage.nextCursor },
   );
+  const { fetchNextPage, hasNextPage, isFetching, isFetchNextPageError } = expenses;
+  const expenseSentinelRef = useRef<HTMLDivElement>(null);
+  const loadMore = useCallback(
+    (automatic = false) => {
+      if (!hasNextPage || isFetching || searchPending) return;
+      if (automatic && isFetchNextPageError) return;
+      void fetchNextPage();
+    },
+    [fetchNextPage, hasNextPage, isFetchNextPageError, isFetching, searchPending],
+  );
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => {
+    loadMoreRef.current = loadMore;
+  }, [loadMore]);
+  useEffect(() => {
+    const sentinel = expenseSentinelRef.current;
+    if (!sentinel || !expenses.hasNextPage || searchPending || typeof IntersectionObserver === 'undefined') return;
+
+    let armed = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            armed = true;
+          } else if (armed) {
+            armed = false;
+            loadMoreRef.current(true);
+          }
+        }
+      },
+      { rootMargin: '0px 0px 300px 0px', threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [expenses.hasNextPage, searchPending]);
   const expenseItems = expenses.data?.pages.flatMap((page) => page.expenses) ?? [];
   const debts = trpc.balances.getSimplifiedDebts.useQuery({ groupId });
   const pendingReceipts = trpc.receipts.listPending.useQuery({ groupId });
@@ -480,16 +515,19 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
           </Card>
         )}
         {expenses.hasNextPage && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-2"
-            disabled={expenses.isFetching || searchPending}
-            onClick={() => void expenses.fetchNextPage()}
-          >
-            {expenses.isFetchingNextPage && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
-            {t('detail.showMoreExpenses')}
-          </Button>
+          <>
+            <div ref={expenseSentinelRef} className="h-px" aria-hidden="true" data-testid="expense-history-sentinel" />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              disabled={expenses.isFetching || searchPending}
+              onClick={() => loadMore(false)}
+            >
+              {expenses.isFetchingNextPage && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+              {t('detail.showMoreExpenses')}
+            </Button>
+          </>
         )}
       </div>
 

@@ -178,8 +178,13 @@ test.describe('Expense history (#326)', () => {
     const more = section.getByRole('button', { name: 'Show more', exact: true });
     await expect(search).toHaveAttribute('placeholder', 'Search titles and notes...');
     await expectRows(page, history.groupId, all.slice(0, 10));
-    await more.click();
+    const sentinel = section.getByTestId('expense-history-sentinel');
+    await sentinel.scrollIntoViewIfNeeded();
     await expectRows(page, history.groupId, all.slice(0, 20));
+    await expect(more).toBeVisible();
+    await more.click();
+    await expectRows(page, history.groupId, all);
+    await expect(more).toHaveCount(0);
 
     await search.fill('  pIzZa  ');
     await expectRows(page, history.groupId, filtered.slice(0, 10));
@@ -192,13 +197,114 @@ test.describe('Expense history (#326)', () => {
     await expect(more).toHaveCount(0);
     await search.fill('');
     // React Query restores pages already loaded for this filter, never another filter's rows.
-    await expectRows(page, history.groupId, all.slice(0, 20));
-    await more.click();
     await expectRows(page, history.groupId, all);
     await expect(more).toHaveCount(0);
     await search.fill('pIzZa');
     await expectRows(page, history.groupId, filtered);
     await expect(more).toHaveCount(0);
+  });
+
+  test('a tall viewport does not cascade-load while the sentinel remains in the prefetch margin', async ({
+    page,
+    history,
+  }) => {
+    const fixtures: ExpenseFixture[] = [];
+    for (let i = 0; i < 25; i++) {
+      fixtures.push(await createExpense(history, { title: `Tall viewport ${i}` }));
+    }
+    const all = newestFirst(fixtures);
+    await page.setViewportSize({ width: 1280, height: 1800 });
+    const cursorRequests: string[] = [];
+    page.on('request', (request) => {
+      const input = expenseListInput(new URL(request.url()));
+      if (!input || input.groupId !== history.groupId || !input.cursor) return;
+      cursorRequests.push(input.cursor);
+    });
+    await login(page, users.alice.email, users.alice.password);
+    await page.goto(`/en/groups/${history.groupId}`);
+    const section = page.getByTestId('expenses-section');
+    const sentinel = section.getByTestId('expense-history-sentinel');
+    const more = section.getByRole('button', { name: 'Show more', exact: true });
+
+    await expectRows(page, history.groupId, all.slice(0, 20));
+    expect(cursorRequests).toHaveLength(1);
+    const remainsInPrefetchMargin = await sentinel.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top <= window.innerHeight + 300 && rect.bottom >= -300;
+    });
+    expect(remainsInPrefetchMargin).toBe(true);
+    await page.waitForTimeout(350);
+    await expectRows(page, history.groupId, all.slice(0, 20));
+    expect(cursorRequests).toHaveLength(1);
+    await expect(more).toBeVisible();
+
+    await more.click();
+    await expectRows(page, history.groupId, all);
+    expect(cursorRequests).toHaveLength(2);
+    await expect(more).toHaveCount(0);
+  });
+
+  test('manual Show more works when IntersectionObserver is unavailable', async ({ page, history }) => {
+    const fixtures: ExpenseFixture[] = [];
+    for (let i = 0; i < 12; i++) {
+      fixtures.push(await createExpense(history, { title: `Manual fallback ${i}` }));
+    }
+    const all = newestFirst(fixtures);
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: undefined });
+    });
+    await login(page, users.alice.email, users.alice.password);
+    await page.goto(`/en/groups/${history.groupId}`);
+    const section = page.getByTestId('expenses-section');
+    await expectRows(page, history.groupId, all.slice(0, 10));
+    await section.getByTestId('expense-history-sentinel').scrollIntoViewIfNeeded();
+    await expectRows(page, history.groupId, all.slice(0, 10));
+    const more = section.getByRole('button', { name: 'Show more', exact: true });
+    await more.click();
+    await expectRows(page, history.groupId, all);
+    await expect(more).toHaveCount(0);
+  });
+
+  test('failed scroll page keeps existing rows and retries deliberately', async ({ page, history }) => {
+    const fixtures: ExpenseFixture[] = [];
+    for (let i = 0; i < 12; i++) {
+      fixtures.push(await createExpense(history, { title: `Retry scroll ${i}` }));
+    }
+    const all = newestFirst(fixtures);
+    await login(page, users.alice.email, users.alice.password);
+    await page.goto(`/en/groups/${history.groupId}`);
+    const section = page.getByTestId('expenses-section');
+    await expectRows(page, history.groupId, all.slice(0, 10));
+
+    const isExpenseList = (url: URL) => expenseListIndex(url) !== -1;
+    let cursorRequests = 0;
+    await page.route(isExpenseList, async (route) => {
+      const url = new URL(route.request().url());
+      const listInput = expenseListInput(url);
+      if (!listInput?.cursor) return route.continue();
+      const body = JSON.parse(url.searchParams.get('input')!);
+      const index = url.searchParams.get('batch') === '1' ? expenseListIndex(url) : 0;
+      body[index].json.search = 'x'.repeat(1001);
+      cursorRequests++;
+      url.searchParams.set('input', JSON.stringify(body));
+      await route.continue({ url: url.toString() });
+    });
+
+    await section.getByTestId('expense-history-sentinel').scrollIntoViewIfNeeded();
+    const alert = section.getByRole('alert');
+    await expect(alert).toBeVisible();
+    await expectRows(page, history.groupId, all.slice(0, 10));
+    await expect.poll(() => cursorRequests).toBeGreaterThan(0);
+    // React Query may retry the failed request; after the error alert appears,
+    // scrolling must not trigger another page load until the user retries.
+    const attemptsAfterFailure = cursorRequests;
+    await page.waitForTimeout(350);
+    expect(cursorRequests).toBe(attemptsAfterFailure);
+
+    await page.unroute(isExpenseList);
+    await alert.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expectRows(page, history.groupId, all);
+    await expect(section.getByRole('alert')).toHaveCount(0);
   });
 
   test('UI distinguishes an empty history from a search with no matches', async ({ page, history }) => {
