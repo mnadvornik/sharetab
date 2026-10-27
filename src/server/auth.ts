@@ -70,6 +70,11 @@ if (authConfig.oidc) {
     id: OIDC_PROVIDER_ID,
     name: oidc.displayName,
     type: 'oidc',
+    // Auth.js defaults a generic OIDC provider to `checks: ['pkce']`, so it would
+    // send no `state`. Cloudflare Access (and the OAuth 2.0 spec's CSRF advice)
+    // rejects such a request with "state is a required parameter"; opting in makes
+    // Auth.js create, cookie-store and verify the state value like PKCE.
+    checks: ['pkce', 'state'],
     issuer: oidc.issuer,
     clientId: oidc.clientId,
     clientSecret: oidc.clientSecret,
