@@ -1,6 +1,6 @@
 /**
  * Pure function to calculate per-person totals with proportional tax/tip distribution.
- * Used by both the authenticated receipt flow and the guest split flow.
+ * Used by the guest split flow, and by the group receipt flow through `calculateReceiptSplitTotals`.
  */
 export function calculateSplitTotals(params: {
   items: { totalPrice: number }[];
@@ -54,6 +54,68 @@ export function calculateSplitTotals(params: {
   }
 
   return results;
+}
+
+/** A receipt item and the people on it, in the order the split uses them */
+export type ReceiptAssignment = { receiptItemId: string; userIds: string[] };
+
+/**
+ * Per-person totals for a group receipt whose items are assigned by id to people by user id:
+ * what the group scan page previews and what `receipts.assignItemsAndCreateExpense` saves (#364).
+ * Tax and tip are shared in proportion to the prices of the items assigned, not the subtotal the
+ * scan read, which no longer adds up once an item is added, deleted or repriced. All of the tax
+ * and tip goes to the people assigned, so the mutation requires every item to be. People come
+ * back in the order they first appear in `assignments`; the last takes the tax and tip's leftover
+ * cents, and an item's own leftover cents go to the first people on it, so the page and the server
+ * must use the same list in the same order. An assignment to an item that isn't in `items` is left
+ * out.
+ */
+export function calculateReceiptSplitTotals(params: {
+  items: { id: string; totalPrice: number }[];
+  assignments: ReceiptAssignment[];
+  tax: number;
+  tip: number;
+}): { userId: string; itemTotal: number; tax: number; tip: number; total: number }[] {
+  const itemIndices = new Map(params.items.map((item, i) => [item.id, i]));
+  const userIds: string[] = [];
+  const userIndices = new Map<string, number>();
+  const userIndex = (userId: string) => {
+    let index = userIndices.get(userId);
+    if (index === undefined) {
+      index = userIds.push(userId) - 1;
+      userIndices.set(userId, index);
+    }
+    return index;
+  };
+
+  const assignments = params.assignments.flatMap(({ receiptItemId, userIds: assigned }) => {
+    const itemIndex = itemIndices.get(receiptItemId);
+    return itemIndex === undefined ? [] : [{ itemIndex, personIndices: assigned.map(userIndex) }];
+  });
+  const totals = calculateSplitTotals({
+    items: params.items,
+    assignments,
+    tax: params.tax,
+    tip: params.tip,
+    peopleCount: userIds.length,
+  });
+  return totals.map(({ personIndex, ...rest }) => ({ userId: userIds[personIndex]!, ...rest }));
+}
+
+/**
+ * The list the group scan page previews `calculateReceiptSplitTotals` with and sends to Create
+ * Expense and Save for later (#364, #411): the receipt's items that have someone, in receipt
+ * order, each with its people in the order the page holds them. The page's selections can still
+ * hold an item deleted from the receipt, so they're read through `items`.
+ */
+export function receiptAssignmentList(
+  items: { id: string }[],
+  selected: Record<string, Iterable<string>>,
+): ReceiptAssignment[] {
+  return items.flatMap((item) => {
+    const userIds = Array.from(selected[item.id] ?? []);
+    return userIds.length > 0 ? [{ receiptItemId: item.id, userIds }] : [];
+  });
 }
 
 /**
