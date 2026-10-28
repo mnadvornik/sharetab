@@ -1,5 +1,12 @@
 import { describe, test, expect } from 'vitest';
-import { calculateClaimTotals, calculateSplitTotals, groupSizeWeights, personItemShares } from './split-calculator';
+import {
+  calculateClaimTotals,
+  calculateReceiptSplitTotals,
+  calculateSplitTotals,
+  groupSizeWeights,
+  personItemShares,
+  receiptAssignmentList,
+} from './split-calculator';
 
 describe('calculateSplitTotals', () => {
   test('splits single item between two people equally', () => {
@@ -500,5 +507,138 @@ describe('groupSizeWeights', () => {
 
   test('weights everyone by group size once someone is a group', () => {
     expect(groupSizeWeights([{ groupSize: 1 }, {}, { groupSize: 3 }])).toEqual({ personWeights: [1, 1, 3] });
+  });
+});
+
+// #364: the receipt page's preview and the expense it saves both come from this
+describe('calculateReceiptSplitTotals', () => {
+  const items = [
+    { id: 'i1', totalPrice: 1001 },
+    { id: 'i2', totalPrice: 2000 },
+    { id: 'i3', totalPrice: 999 },
+  ];
+
+  test('is calculateSplitTotals by item id and user id, in the order it returns people', () => {
+    const totals = calculateReceiptSplitTotals({
+      items,
+      assignments: [
+        { receiptItemId: 'i2', userIds: ['bob'] },
+        { receiptItemId: 'i1', userIds: ['carol', 'alice'] },
+        { receiptItemId: 'i3', userIds: ['alice'] },
+      ],
+      tax: 333,
+      tip: 401,
+    });
+    const byIndex = calculateSplitTotals({
+      items,
+      assignments: [
+        { itemIndex: 1, personIndices: [0] },
+        { itemIndex: 0, personIndices: [1, 2] },
+        { itemIndex: 2, personIndices: [2] },
+      ],
+      tax: 333,
+      tip: 401,
+      peopleCount: 3,
+    });
+
+    const userIds = ['bob', 'carol', 'alice'];
+    expect(totals).toEqual(byIndex.map(({ personIndex, ...rest }) => ({ userId: userIds[personIndex], ...rest })));
+  });
+
+  test('shares tax over the item prices (the numbers in the issue)', () => {
+    const totals = calculateReceiptSplitTotals({
+      items: [
+        { id: 'i1', totalPrice: 2000 },
+        { id: 'i2', totalPrice: 2000 },
+        { id: 'i3', totalPrice: 1000 },
+      ],
+      assignments: [
+        { receiptItemId: 'i1', userIds: ['alice'] },
+        { receiptItemId: 'i2', userIds: ['bob'] },
+        { receiptItemId: 'i3', userIds: ['carol'] },
+      ],
+      tax: 400,
+      tip: 0,
+    });
+
+    expect(totals.map((p) => [p.userId, p.tax, p.total])).toEqual([
+      ['alice', 160, 2160],
+      ['bob', 160, 2160],
+      ['carol', 80, 1080],
+    ]);
+  });
+
+  test('leaves out an assignment to an item that is not in the list', () => {
+    const totals = calculateReceiptSplitTotals({
+      items,
+      assignments: [
+        { receiptItemId: 'deleted', userIds: ['dave'] },
+        { receiptItemId: 'i1', userIds: ['alice'] },
+      ],
+      tax: 0,
+      tip: 0,
+    });
+
+    expect(totals).toEqual([{ userId: 'alice', itemTotal: 1001, tax: 0, tip: 0, total: 1001 }]);
+  });
+
+  test('gives the whole tax and tip to the items assigned, which is why the server requires every item', () => {
+    const totals = calculateReceiptSplitTotals({
+      items: [
+        { id: 'i1', totalPrice: 1000 },
+        { id: 'i2', totalPrice: 1000 },
+      ],
+      assignments: [{ receiptItemId: 'i1', userIds: ['alice'] }],
+      tax: 200,
+      tip: 100,
+    });
+
+    expect(totals).toEqual([{ userId: 'alice', itemTotal: 1000, tax: 200, tip: 100, total: 1300 }]);
+  });
+
+  test('returns people in the order they first appear, the last taking the leftover cent', () => {
+    const totals = calculateReceiptSplitTotals({
+      items: [
+        { id: 'i1', totalPrice: 1000 },
+        { id: 'i2', totalPrice: 1000 },
+        { id: 'i3', totalPrice: 1000 },
+      ],
+      assignments: [
+        { receiptItemId: 'i3', userIds: ['carol'] },
+        { receiptItemId: 'i1', userIds: ['alice'] },
+        { receiptItemId: 'i2', userIds: ['bob'] },
+      ],
+      tax: 100,
+      tip: 0,
+    });
+
+    // 33.33 cents of tax each: 33 for all but the last, who takes the 34 left
+    expect(totals.map((p) => [p.userId, p.total])).toEqual([
+      ['carol', 1033],
+      ['alice', 1033],
+      ['bob', 1034],
+    ]);
+  });
+
+  test('returns nobody for no assignments', () => {
+    expect(calculateReceiptSplitTotals({ items, assignments: [], tax: 100, tip: 50 })).toEqual([]);
+  });
+});
+
+describe('receiptAssignmentList', () => {
+  const items = [{ id: 'i1' }, { id: 'i2' }, { id: 'i3' }];
+
+  test('lists the items that have someone in receipt order, each with its people in the order held', () => {
+    expect(receiptAssignmentList(items, { i3: new Set(['bob', 'alice']), i1: new Set(['alice']) })).toEqual([
+      { receiptItemId: 'i1', userIds: ['alice'] },
+      { receiptItemId: 'i3', userIds: ['bob', 'alice'] },
+    ]);
+  });
+
+  // #411: removing an item kept its key, which was counted as assigned and sent
+  test('leaves out an item deleted from the receipt and an item with nobody', () => {
+    expect(receiptAssignmentList(items, { deleted: new Set(['alice']), i2: new Set(), i3: new Set(['bob']) })).toEqual([
+      { receiptItemId: 'i3', userIds: ['bob'] },
+    ]);
   });
 });
